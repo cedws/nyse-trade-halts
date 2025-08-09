@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strconv"
 	"text/tabwriter"
 	"time"
 
@@ -93,7 +94,7 @@ func (w *WatchCmd) Run() error {
 func displayHaltsTable(halts []TradeHalt) {
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 	fmt.Fprintln(w, "SYMBOL\tNAME\tEXCHANGE\tREASON\tHALT TIME (LOCAL)\tRESUME TIME (LOCAL)")
-	fmt.Fprintln(w, "------\t----\t--------\t------\t-----------------\t------------------")
+	fmt.Fprintln(w, "------\t----\t--------\t------\t-----------------\t-------------------")
 
 	for _, halt := range halts {
 		haltTimeLocal := ""
@@ -113,6 +114,14 @@ func displayHaltsTable(halts []TradeHalt) {
 
 func clearScreen() {
 	fmt.Print("\033[2J\033[H")
+}
+
+func tryUnquote(s string) string {
+	unquoted, err := strconv.Unquote(s)
+	if err != nil {
+		return s
+	}
+	return unquoted
 }
 
 type TradeHalt struct {
@@ -163,7 +172,7 @@ func parseTradeHalts(reader io.Reader) ([]TradeHalt, error) {
 
 		halts = append(halts, TradeHalt{
 			Symbol:         record[2],
-			Name:           record[3],
+			Name:           tryUnquote(record[3]),
 			Exchange:       record[4],
 			Reason:         record[5],
 			HaltDateTime:   haltDateTime,
