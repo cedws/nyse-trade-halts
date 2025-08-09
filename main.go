@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/csv"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -16,6 +17,16 @@ const (
 	nyseTradeHaltURL = "https://www.nyse.com/api/trade-halts/current/download"
 	bellSound        = "\a"
 )
+
+var nyseLocation *time.Location
+
+func init() {
+	var err error
+	nyseLocation, err = time.LoadLocation("America/New_York")
+	if err != nil {
+		panic(err)
+	}
+}
 
 type CLI struct {
 	Fetch FetchCmd `cmd:"" help:"Fetch current NYSE trade halts."`
@@ -81,13 +92,21 @@ func (w *WatchCmd) Run() error {
 
 func displayHaltsTable(halts []TradeHalt) {
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "SYMBOL\tNAME\tEXCHANGE\tREASON\tHALT DATE\tHALT TIME\tRESUME DATE")
-	fmt.Fprintln(w, "------\t----\t--------\t------\t---------\t---------\t-----------")
+	fmt.Fprintln(w, "SYMBOL\tNAME\tEXCHANGE\tREASON\tHALT TIME (LOCAL)\tRESUME TIME (LOCAL)")
+	fmt.Fprintln(w, "------\t----\t--------\t------\t-----------------\t------------------")
 
 	for _, halt := range halts {
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+		haltTimeLocal := ""
+		if !halt.HaltDateTime.IsZero() {
+			haltTimeLocal = halt.HaltDateTime.Local().Format("2006-01-02 15:04:05")
+		}
+		resumeTimeLocal := ""
+		if !halt.ResumeDateTime.IsZero() {
+			resumeTimeLocal = halt.ResumeDateTime.Local().Format("2006-01-02 15:04:05")
+		}
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n",
 			halt.Symbol, halt.Name, halt.Exchange, halt.Reason,
-			halt.HaltDate, halt.HaltTime, halt.ResumeDate)
+			haltTimeLocal, resumeTimeLocal)
 	}
 	w.Flush()
 }
@@ -97,29 +116,17 @@ func clearScreen() {
 }
 
 type TradeHalt struct {
-	HaltDate   string
-	HaltTime   string
-	Symbol     string
-	Name       string
-	Exchange   string
-	Reason     string
-	ResumeDate string
-	NYSETime   string
+	Symbol         string
+	Name           string
+	Exchange       string
+	Reason         string
+	HaltDateTime   time.Time
+	ResumeDateTime time.Time
 }
 
-func fetchTradeHalts() ([]TradeHalt, error) {
-	resp, err := http.Get(nyseTradeHaltURL)
-	if err != nil {
-		return nil, fmt.Errorf("failed to fetch trade halts: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("bad status code: %d", resp.StatusCode)
-	}
-
-	reader := csv.NewReader(resp.Body)
-	records, err := reader.ReadAll()
+func parseTradeHalts(reader io.Reader) ([]TradeHalt, error) {
+	csvReader := csv.NewReader(reader)
+	records, err := csvReader.ReadAll()
 	if err != nil {
 		return nil, fmt.Errorf("failed to read csv: %w", err)
 	}
@@ -137,19 +144,48 @@ func fetchTradeHalts() ([]TradeHalt, error) {
 		if len(record) != 8 {
 			panic("malformed record")
 		}
+
+		var haltDateTime time.Time
+		if record[0] != "" && record[1] != "" {
+			haltDateTime, err = time.ParseInLocation("2006-01-02 15:04:05", record[0]+" "+record[1], nyseLocation)
+			if err != nil {
+				log.Printf("failed to parse halt datetime for %s: %v", record[2], err)
+			}
+		}
+
+		var resumeDateTime time.Time
+		if record[6] != "" && record[7] != "" {
+			resumeDateTime, err = time.ParseInLocation("2006-01-02 15:04:05", record[6]+" "+record[7], nyseLocation)
+			if err != nil {
+				log.Printf("failed to parse resume datetime for %s: %v", record[2], err)
+			}
+		}
+
 		halts = append(halts, TradeHalt{
-			HaltDate:   record[0],
-			HaltTime:   record[1],
-			Symbol:     record[2],
-			Name:       record[3],
-			Exchange:   record[4],
-			Reason:     record[5],
-			ResumeDate: record[6],
-			NYSETime:   record[7],
+			Symbol:         record[2],
+			Name:           record[3],
+			Exchange:       record[4],
+			Reason:         record[5],
+			HaltDateTime:   haltDateTime,
+			ResumeDateTime: resumeDateTime,
 		})
 	}
 
 	return halts, nil
+}
+
+func fetchTradeHalts() ([]TradeHalt, error) {
+	resp, err := http.Get(nyseTradeHaltURL)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch trade halts: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("bad status code: %d", resp.StatusCode)
+	}
+
+	return parseTradeHalts(resp.Body)
 }
 
 func main() {
