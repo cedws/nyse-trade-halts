@@ -37,7 +37,7 @@ type CLI struct {
 type FetchCmd struct{}
 
 func (f *FetchCmd) Run() error {
-	halts, err := fetchTradeHalts()
+	halts, _, err := fetchTradeHalts()
 	if err != nil {
 		return fmt.Errorf("failed to fetch trade halts: %w", err)
 	}
@@ -51,22 +51,24 @@ type WatchCmd struct {
 }
 
 func (w *WatchCmd) Run() error {
-	initialHalts, err := fetchTradeHalts()
-	if err != nil {
-		return fmt.Errorf("failed to fetch initial trade halts: %w", err)
+	displayFunc := func(halts []TradeHalt, lastModified *time.Time) {
+		clearScreen()
+		displayHaltsTable(halts)
+		fmt.Println()
+
+		w := tabwriter.NewWriter(os.Stdout, 0, 0, 1, ' ', 0)
+		fmt.Fprintf(w, "Last fetch\t@ %s\n", time.Now().Format(time.RFC1123Z))
+		fmt.Fprintf(w, "Last updated\t@ %s\n", lastModified.Local().Format(time.RFC1123Z))
+		w.Flush()
 	}
 
 	prevHalts := make(map[string]TradeHalt)
-	for _, halt := range initialHalts {
-		prevHalts[halt.Symbol] = halt
-	}
 
-	clearScreen()
-	displayHaltsTable(initialHalts)
-	fmt.Printf("\nUpdated @ %s\n", time.Now().Format(time.RFC1123Z))
+	ticker := time.NewTicker(w.Interval)
+	defer ticker.Stop()
 
-	for range time.Tick(w.Interval) {
-		currentHalts, err := fetchTradeHalts()
+	for {
+		currentHalts, lastModified, err := fetchTradeHalts()
 		if err != nil {
 			log.Fatal(err)
 		}
@@ -94,9 +96,11 @@ func (w *WatchCmd) Run() error {
 			fmt.Print(bellSound)
 		}
 
-		clearScreen()
-		displayHaltsTable(currentHalts)
-		fmt.Printf("\nUpdated @ %s\n", time.Now().Format(time.RFC1123Z))
+		displayFunc(currentHalts, lastModified)
+
+		if _, ok := <-ticker.C; !ok {
+			break
+		}
 	}
 
 	return nil
@@ -112,10 +116,12 @@ func displayHaltsTable(halts []TradeHalt) {
 		if !halt.HaltDateTime.IsZero() {
 			haltTimeLocal = halt.HaltDateTime.Local().Format("2006-01-02 15:04:05")
 		}
+
 		resumeTimeLocal := ""
 		if !halt.ResumeDateTime.IsZero() {
 			resumeTimeLocal = halt.ResumeDateTime.Local().Format("2006-01-02 15:04:05")
 		}
+
 		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n",
 			halt.Symbol, halt.Name, halt.Exchange, halt.Reason,
 			haltTimeLocal, resumeTimeLocal)
@@ -194,18 +200,28 @@ func parseTradeHalts(reader io.Reader) ([]TradeHalt, error) {
 	return halts, nil
 }
 
-func fetchTradeHalts() ([]TradeHalt, error) {
+func fetchTradeHalts() ([]TradeHalt, *time.Time, error) {
 	resp, err := http.Get(nyseTradeHaltURL)
 	if err != nil {
-		return nil, fmt.Errorf("failed to fetch trade halts: %w", err)
+		return nil, nil, fmt.Errorf("failed to fetch trade halts: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("bad status code: %d", resp.StatusCode)
+		return nil, nil, fmt.Errorf("bad status code: %d", resp.StatusCode)
 	}
 
-	return parseTradeHalts(resp.Body)
+	halts, err := parseTradeHalts(resp.Body)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to parse trade halts: %w", err)
+	}
+
+	lastModified, err := time.Parse(time.RFC1123, resp.Header.Get("Last-Modified"))
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to parse last modified header: %w", err)
+	}
+
+	return halts, &lastModified, nil
 }
 
 func main() {
