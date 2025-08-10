@@ -56,13 +56,14 @@ func (w *WatchCmd) Run() error {
 		return fmt.Errorf("failed to fetch initial trade halts: %w", err)
 	}
 
-	lastHalts := make(map[string]struct{})
+	prevHalts := make(map[string]TradeHalt)
 	for _, halt := range initialHalts {
-		lastHalts[halt.Symbol] = struct{}{}
+		prevHalts[halt.Symbol] = halt
 	}
 
 	clearScreen()
 	displayHaltsTable(initialHalts)
+	fmt.Printf("\nUpdated @ %s\n", time.Now().Format(time.RFC1123Z))
 
 	for range time.Tick(w.Interval) {
 		currentHalts, err := fetchTradeHalts()
@@ -70,16 +71,26 @@ func (w *WatchCmd) Run() error {
 			log.Fatal(err)
 		}
 
-		newHalts := false
+		haltsUpdated := false
 
 		for _, halt := range currentHalts {
-			if _, found := lastHalts[halt.Symbol]; !found {
-				lastHalts[halt.Symbol] = struct{}{}
-				newHalts = true
+			prevHalt, ok := prevHalts[halt.Symbol]
+			if ok {
+				if prevHalt.ResumeDateTime != halt.ResumeDateTime {
+					// Resume time updated
+					prevHalts[halt.Symbol] = halt
+					haltsUpdated = true
+				}
+
+				continue
 			}
+
+			// New halt added
+			prevHalts[halt.Symbol] = halt
+			haltsUpdated = true
 		}
 
-		if newHalts {
+		if haltsUpdated {
 			fmt.Print(bellSound)
 		}
 
