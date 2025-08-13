@@ -1,4 +1,4 @@
-module github.com/cedws/nyse-trade-halt
+module github.com/cedws/nyse-trade-halts
 
 go 1.24.4
 
