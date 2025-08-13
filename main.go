@@ -42,7 +42,7 @@ func (f *FetchCmd) Run() error {
 		return fmt.Errorf("failed to fetch trade halts: %w", err)
 	}
 
-	displayHaltsTable(halts)
+	displayTable(halts)
 	return nil
 }
 
@@ -51,26 +51,17 @@ type WatchCmd struct {
 }
 
 func (w *WatchCmd) Run() error {
-	displayFunc := func(halts []TradeHalt, lastModified *time.Time) {
-		clearScreen()
-		displayHaltsTable(halts)
-		fmt.Println()
-
-		w := tabwriter.NewWriter(os.Stdout, 0, 0, 1, ' ', 0)
-		fmt.Fprintf(w, "Last fetch\t@ %s\n", time.Now().Format(time.RFC1123Z))
-		fmt.Fprintf(w, "Last updated\t@ %s\n", lastModified.Local().Format(time.RFC1123Z))
-		w.Flush()
-	}
-
 	prevHalts := make(map[string]TradeHalt)
 
 	ticker := time.NewTicker(w.Interval)
 	defer ticker.Stop()
 
+	writer := tabwriter.NewWriter(os.Stdout, 0, 0, 1, ' ', 0)
+
 	for {
 		currentHalts, lastModified, err := fetchTradeHalts()
 		if err != nil {
-			log.Fatal(err)
+			return err
 		}
 
 		haltsUpdated := false
@@ -96,7 +87,10 @@ func (w *WatchCmd) Run() error {
 			fmt.Print(bellSound)
 		}
 
-		displayFunc(currentHalts, lastModified)
+		clearScreen()
+		displayTable(currentHalts)
+		fmt.Println()
+		displayInfo(writer, lastModified.Local())
 
 		if _, ok := <-ticker.C; !ok {
 			break
@@ -106,7 +100,7 @@ func (w *WatchCmd) Run() error {
 	return nil
 }
 
-func displayHaltsTable(halts []TradeHalt) {
+func displayTable(halts []TradeHalt) {
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 	fmt.Fprintln(w, "SYMBOL\tNAME\tEXCHANGE\tREASON\tHALT TIME (LOCAL)\tRESUME TIME (LOCAL)")
 	fmt.Fprintln(w, "------\t----\t--------\t------\t-----------------\t-------------------")
@@ -126,6 +120,15 @@ func displayHaltsTable(halts []TradeHalt) {
 			halt.Symbol, halt.Name, halt.Exchange, halt.Reason,
 			haltTimeLocal, resumeTimeLocal)
 	}
+
+	w.Flush()
+}
+
+func displayInfo(w *tabwriter.Writer, lastModified time.Time) {
+	fmt.Fprintf(w, "Last fetch\t:\t%s\n", time.Now().Format(time.RFC1123Z))
+	fmt.Fprintf(w, "Last updated\t:\t%s\n", lastModified.Format(time.RFC1123Z))
+	fmt.Fprintf(w, "Data age\t:\t%s\n", time.Since(lastModified).Round(time.Second).String())
+
 	w.Flush()
 }
 
