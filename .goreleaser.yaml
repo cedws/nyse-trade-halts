@@ -34,8 +34,6 @@ homebrew_casks:
       name: homebrew-tap
       owner: cedws
       token: "{{ .Env.HOMEBREW_TAP_PUSH_TOKEN }}"
-    custom_block: |
-      binary "nyse-trade-halts", target: "age-plugin-nyse-trade-halts"
     hooks:
       post:
         install: |
